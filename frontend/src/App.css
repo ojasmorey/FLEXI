@@ -1217,3 +1217,40 @@
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Auth header alignment fix ---------- */
+.auth-card .auth-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 28px;
+}
+
+.auth-card .auth-card-header .auth-brand {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.auth-card .auth-card-header .theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 380px) {
+  .auth-card .auth-card-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .auth-card .auth-card-header .theme-toggle {
+    margin-left: auto;
+  }
+}
+

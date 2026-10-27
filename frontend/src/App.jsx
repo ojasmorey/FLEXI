@@ -447,22 +447,38 @@ function App() {
     return (
       <main className={`auth-page theme-${theme}`}>
         <section className="auth-card">
-          <button
-            type="button"
-            className="theme-toggle"
-            onClick={() =>
-              setTheme((current) => (current === "dark" ? "light" : "dark"))
-            }
-            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          <div
+            className="auth-header"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "12px",
+              marginBottom: "28px",
+              width: "100%",
+            }}
           >
-            {theme === "dark" ? "☀ Light mode" : "☾ Dark mode"}
-          </button>
+            <a
+              className="auth-brand"
+              href="/"
+              style={{ margin: 0, display: "inline-flex", alignItems: "center" }}
+            >
+              FLEXI
+            </a>
 
-          <a className="brand auth-brand" href="/">
-            <span className="brand-icon">F</span>
-            FLEXI
-          </a>
+            <button
+              type="button"
+              className="theme-toggle"
+              style={{ flexShrink: 0, margin: 0 }}
+              onClick={() =>
+                setTheme((current) => (current === "dark" ? "light" : "dark"))
+              }
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            >
+              {theme === "dark" ? "☀ Light mode" : "☾ Dark mode"}
+            </button>
+          </div>
 
           <p className="eyebrow">YOUR PERSONAL WORKSPACE</p>
 
