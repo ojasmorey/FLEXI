@@ -14,7 +14,38 @@ const EMPTY_FORM = {
   status: "Pending",
 };
 
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getTaskDateKey(value) {
+  if (!value) return "";
+  if (typeof value === "string") {
+    const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) return match[1];
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : getLocalDateKey(date);
+}
+
+function addDaysToDateKey(dateKey, days) {
+  const date = new Date(`${dateKey}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return getLocalDateKey(date);
+}
+
 function App() {
+  const [theme, setTheme] = useState(
+    () => localStorage.getItem("flexi_theme") || "dark"
+  );
+
+  useEffect(() => {
+    localStorage.setItem("flexi_theme", theme);
+  }, [theme]);
+
   const [token, setToken] = useState(
     () => localStorage.getItem("flexi_token") || ""
   );
@@ -41,6 +72,9 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
+  const [activeView, setActiveView] = useState("All Tasks");
+  const [viewMode, setViewMode] = useState("list");
+  const [draggedTaskId, setDraggedTaskId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -158,42 +192,58 @@ function App() {
     }
   }, [token, user]);
 
+  const todayKey = getLocalDateKey();
+  const weekEndKey = addDaysToDateKey(todayKey, 7);
+
   const stats = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const overdueTasks = tasks.filter((task) => {
+      const dueKey = getTaskDateKey(task.dueDate);
+      return Boolean(
+        dueKey && dueKey < todayKey && task.status !== "Completed"
+      );
+    });
 
     return {
       total: tasks.length,
       pending: tasks.filter((task) => task.status === "Pending").length,
-      progress: tasks.filter(
-        (task) => task.status === "In Progress"
-      ).length,
-      completed: tasks.filter(
-        (task) => task.status === "Completed"
-      ).length,
-      overdue: tasks.filter((task) => {
-        if (!task.dueDate || task.status === "Completed") {
-          return false;
-        }
-
-        const due = new Date(task.dueDate);
-        due.setHours(0, 0, 0, 0);
-
-        return due < today;
-      }).length,
+      progress: tasks.filter((task) => task.status === "In Progress").length,
+      completed: tasks.filter((task) => task.status === "Completed").length,
+      overdue: overdueTasks.length,
     };
-  }, [tasks]);
+  }, [tasks, todayKey]);
 
-  const visibleTasks = tasks.filter((task) => {
-    const matchesFilter = filter === "All" || task.status === filter;
+  // Date-based views are derived from real task dates; no extra backend fields are needed.
+  const baseVisibleTasks = tasks.filter((task) => {
+    const dueKey = getTaskDateKey(task.dueDate);
+    const isUnfinished = task.status !== "Completed";
+    let matchesView = true;
+
+    if (activeView === "My Day") {
+      // Show today's tasks plus unfinished overdue tasks that still need attention.
+      matchesView = dueKey === todayKey || Boolean(dueKey && dueKey < todayKey && isUnfinished);
+    } else if (activeView === "Upcoming") {
+      matchesView = Boolean(dueKey && dueKey > todayKey && dueKey <= weekEndKey && isUnfinished);
+    } else if (activeView === "Overdue") {
+      matchesView = Boolean(dueKey && dueKey < todayKey && isUnfinished);
+    }
+
+    if (!matchesView) return false;
+
     const query = search.trim().toLowerCase();
-
-    const matchesSearch =
+    return (
       (task.title || "").toLowerCase().includes(query) ||
-      (task.description || "").toLowerCase().includes(query);
-
-    return matchesFilter && matchesSearch;
+      (task.description || "").toLowerCase().includes(query)
+    );
   });
+
+  const visibleTasks = baseVisibleTasks.filter(
+    (task) => filter === "All" || task.status === filter
+  );
+
+  function selectView(view) {
+    setActiveView(view);
+    setFilter("All");
+  }
 
   function updateTaskField(event) {
     setForm({
@@ -317,10 +367,98 @@ function App() {
     });
   }
 
+  function renderTaskCard(task, isBoardCard = false) {
+    const completed = task.status === "Completed";
+    const dueKey = getTaskDateKey(task.dueDate);
+    const overdue = Boolean(dueKey && dueKey < todayKey && !completed);
+    const dueDate = dueKey
+      ? new Date(`${dueKey}T00:00:00`).toLocaleDateString()
+      : "No deadline";
+
+    return (
+      <article
+        className={`task-card ${completed ? "task-completed" : ""} ${
+          overdue ? "task-overdue" : ""
+        } ${isBoardCard ? "task-card-board" : ""} ${
+          draggedTaskId === task._id ? "is-dragging" : ""
+        }`}
+        key={task._id}
+        draggable={isBoardCard}
+        onDragStart={
+          isBoardCard
+            ? (event) => {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", task._id);
+                setDraggedTaskId(task._id);
+              }
+            : undefined
+        }
+        onDragEnd={() => setDraggedTaskId(null)}
+      >
+        <div className="task-card-top">
+          <div className="task-title-area">
+            <div className="task-title-row">
+              <span
+                className={`task-completion-indicator ${
+                  completed ? "is-complete" : ""
+                }`}
+                aria-label={completed ? "Task completed" : "Task not completed"}
+                title={completed ? "Completed" : "Not completed"}
+              >
+                {completed ? "✓" : ""}
+              </span>
+              <h3>{task.title}</h3>
+            </div>
+            {task.description && <p>{task.description}</p>}
+          </div>
+          <span className={`priority ${(task.priority || "Medium").toLowerCase()}`}>
+            {task.priority || "Medium"}
+          </span>
+        </div>
+
+        <div className="task-card-bottom">
+          <div className="task-meta">
+            <span>◷ {dueDate}</span>
+            {overdue && <span className="overdue-label">Overdue</span>}
+            <select
+              value={task.status || "Pending"}
+              aria-label={`Status for ${task.title}`}
+              onChange={(event) => changeStatus(task, event.target.value)}
+            >
+              <option>Pending</option>
+              <option>In Progress</option>
+              <option>Completed</option>
+            </select>
+          </div>
+          <div className="task-actions">
+            <button type="button" className="text-button" onClick={() => startEditing(task)}>
+              Edit
+            </button>
+            <button type="button" className="text-button delete-button" onClick={() => deleteTask(task._id)}>
+              Delete
+            </button>
+          </div>
+        </div>
+      </article>
+    );
+  }
+
   if (!token || !user) {
     return (
-      <main className="auth-page">
+      <main className={`auth-page theme-${theme}`}>
         <section className="auth-card">
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={() =>
+              setTheme((current) => (current === "dark" ? "light" : "dark"))
+            }
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          >
+            {theme === "dark" ? "☀ Light mode" : "☾ Dark mode"}
+          </button>
+
           <a className="brand auth-brand" href="/">
             <span className="brand-icon">F</span>
             FLEXI
@@ -451,7 +589,7 @@ function App() {
   }
 
   return (
-    <div className="flexi-app">
+    <div className={`flexi-app theme-${theme}`}>
       <aside className="sidebar">
         <a className="brand" href="#dashboard">
           <span className="brand-icon">F</span>
@@ -460,21 +598,37 @@ function App() {
 
         <p className="nav-label">WORKSPACE</p>
 
-        <a className="nav-link active" href="#dashboard">
-          ▦ Dashboard
-        </a>
-
-        <a
-          className="nav-link"
-          href="#task-form"
-          onClick={startNewTask}
+        <button
+          type="button"
+          className={`nav-link ${activeView === "All Tasks" ? "active" : ""}`}
+          onClick={() => selectView("All Tasks")}
         >
+          ▦ All Tasks
+        </button>
+        <button
+          type="button"
+          className={`nav-link ${activeView === "My Day" ? "active" : ""}`}
+          onClick={() => selectView("My Day")}
+        >
+          ☀ My Day
+        </button>
+        <button
+          type="button"
+          className={`nav-link ${activeView === "Upcoming" ? "active" : ""}`}
+          onClick={() => selectView("Upcoming")}
+        >
+          ◷ Upcoming
+        </button>
+        <button
+          type="button"
+          className={`nav-link ${activeView === "Overdue" ? "active" : ""}`}
+          onClick={() => selectView("Overdue")}
+        >
+          ⚠ Overdue
+        </button>
+        <button type="button" className="nav-link" onClick={startNewTask}>
           ＋ Create task
-        </a>
-
-        <a className="nav-link" href="#task-list">
-          ☷ All tasks
-        </a>
+        </button>
 
         <div className="sidebar-bottom">
           <div className="avatar">
@@ -501,6 +655,18 @@ function App() {
             <p className="eyebrow">YOUR WORKSPACE</p>
             <h1>Task Dashboard</h1>
           </div>
+          <button
+  type="button"
+  className="theme-toggle"
+  onClick={() =>
+    setTheme((current) => (current === "dark" ? "light" : "dark"))
+  }
+  aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+  title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+>
+  {theme === "dark" ? "☀ Light mode" : "☾ Dark mode"}
+</button>
+
 
           <button
             type="button"
@@ -555,150 +721,125 @@ function App() {
           <div className="panel task-panel" id="task-list">
             <div className="panel-heading">
               <div>
-                <h2>Your Tasks</h2>
-                <p>Tasks belonging to your account.</p>
+                <h2>{activeView}</h2>
+                <p>
+                  {activeView === "My Day"
+                    ? "Tasks due today and overdue tasks that still need attention."
+                    : activeView === "Upcoming"
+                      ? "Unfinished tasks due in the next seven days."
+                      : activeView === "Overdue"
+                        ? "Unfinished tasks whose due dates have passed."
+                        : "Plan, organize, and track your tasks."}
+                </p>
               </div>
-
               <span className="count-pill">
-                {visibleTasks.length} tasks
+                {(viewMode === "board" ? baseVisibleTasks : visibleTasks).length} tasks
               </span>
             </div>
 
-            <input
-              className="search-input"
-              aria-label="Search tasks"
-              placeholder="Search tasks..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
+            <div className="task-toolbar">
+              <input
+                className="search-input"
+                aria-label="Search tasks"
+                placeholder="Search tasks..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              <div className="view-switch" role="group" aria-label="Task view">
+                <button
+                  type="button"
+                  className={`view-switch-button ${viewMode === "list" ? "selected" : ""}`}
+                  onClick={() => setViewMode("list")}
+                  aria-pressed={viewMode === "list"}
+                >
+                  ☷ List
+                </button>
+                <button
+                  type="button"
+                  className={`view-switch-button ${viewMode === "board" ? "selected" : ""}`}
+                  onClick={() => {
+                    setFilter("All");
+                    setViewMode("board");
+                  }}
+                  aria-pressed={viewMode === "board"}
+                >
+                  ▦ Board
+                </button>
+              </div>
+            </div>
 
-            <div className="filter-row">
-              {["All", "Pending", "In Progress", "Completed"].map(
-                (item) => (
+            {viewMode === "list" && (
+              <div className="filter-row">
+                {["All", "Pending", "In Progress", "Completed"].map((item) => (
                   <button
                     type="button"
                     key={item}
-                    className={`filter-button ${
-                      filter === item ? "selected" : ""
-                    }`}
+                    className={`filter-button ${filter === item ? "selected" : ""}`}
                     onClick={() => setFilter(item)}
                   >
                     {item}
                   </button>
-                )
-              )}
-            </div>
-
-            {error && (
-              <p className="message error-message" role="alert">
-                {error}
-              </p>
+                ))}
+              </div>
             )}
 
-            {notice && (
-              <p className="message success-message" role="status">
-                {notice}
-              </p>
-            )}
+            {error && <p className="message error-message" role="alert">{error}</p>}
+            {notice && <p className="message success-message" role="status">{notice}</p>}
 
             {loading ? (
               <p className="empty-state">Loading tasks...</p>
+            ) : viewMode === "board" ? (
+              <div className="kanban-board">
+                {["Pending", "In Progress", "Completed"].map((status) => {
+                  const columnTasks = baseVisibleTasks.filter((task) => task.status === status);
+                  return (
+                    <section
+                      className={`kanban-column kanban-${status.toLowerCase().replace(/\s+/g, "-")} ${draggedTaskId ? "drop-ready" : ""}`}
+                      key={status}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const id = event.dataTransfer.getData("text/plain");
+                        const draggedTask = tasks.find((task) => task._id === id);
+                        if (draggedTask && draggedTask.status !== status) {
+                          changeStatus(draggedTask, status);
+                        }
+                        setDraggedTaskId(null);
+                      }}
+                    >
+                      <div className="kanban-column-heading">
+                        <span className={`kanban-status-dot dot-${status.toLowerCase().replace(/\s+/g, "-")}`} />
+                        <h3>{status}</h3>
+                        <span className="kanban-count">{columnTasks.length}</span>
+                      </div>
+                      <div className="kanban-column-content">
+                        {columnTasks.length === 0 ? (
+                          <div className="kanban-empty">Drop a task here</div>
+                        ) : (
+                          columnTasks.map((task) => renderTaskCard(task, true))
+                        )}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
             ) : visibleTasks.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-icon">☷</div>
                 <h3>No tasks found</h3>
-                <p>Create a task or change your search and filters.</p>
+                <p>
+                  {activeView === "Upcoming"
+                    ? "No unfinished tasks are due in the next seven days."
+                    : activeView === "Overdue"
+                      ? "You have no overdue unfinished tasks."
+                      : activeView === "My Day"
+                        ? "Nothing due today. You are all caught up."
+                        : "Create a task or change your search and filters."}
+                </p>
               </div>
             ) : (
               <div className="task-list">
-                {visibleTasks.map((task) => {
-                  const completed = task.status === "Completed";
-
-                  const dueDate = task.dueDate
-                    ? new Date(task.dueDate).toLocaleDateString()
-                    : "No deadline";
-
-                  return (
-                    <article
-                      className={`task-card ${
-                        completed ? "task-completed" : ""
-                      }`}
-                      key={task._id}
-                    >
-                      <div className="task-card-top">
-                        <div className="task-title-area">
-                          <div className="task-title-row">
-                            <span
-                              className={`task-completion-indicator ${
-                                completed ? "is-complete" : ""
-                              }`}
-                              aria-label={
-                                completed
-                                  ? "Task completed"
-                                  : "Task not completed"
-                              }
-                              title={
-                                completed ? "Completed" : "Not completed"
-                              }
-                            >
-                              {completed ? "✓" : ""}
-                            </span>
-
-                            <h3>{task.title}</h3>
-                          </div>
-
-                          {task.description && (
-                            <p>{task.description}</p>
-                          )}
-                        </div>
-
-                        <span
-                          className={`priority ${
-                            (task.priority || "Medium").toLowerCase()
-                          }`}
-                        >
-                          {task.priority || "Medium"}
-                        </span>
-                      </div>
-
-                      <div className="task-card-bottom">
-                        <div className="task-meta">
-                          <span>◷ {dueDate}</span>
-
-                          <select
-                            value={task.status || "Pending"}
-                            aria-label={`Status for ${task.title}`}
-                            onChange={(event) =>
-                              changeStatus(task, event.target.value)
-                            }
-                          >
-                            <option>Pending</option>
-                            <option>In Progress</option>
-                            <option>Completed</option>
-                          </select>
-                        </div>
-
-                        <div className="task-actions">
-                          <button
-                            type="button"
-                            className="text-button"
-                            onClick={() => startEditing(task)}
-                          >
-                            Edit
-                          </button>
-
-                          <button
-                            type="button"
-                            className="text-button delete-button"
-                            onClick={() => deleteTask(task._id)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })}
+                {visibleTasks.map((task) => renderTaskCard(task))}
               </div>
             )}
           </div>
@@ -738,12 +879,7 @@ function App() {
               />
 
               <label htmlFor="priority">Priority</label>
-              <select
-                id="priority"
-                name="priority"
-                value={form.priority}
-                onChange={updateTaskField}
-              >
+              <select id="priority" name="priority" value={form.priority} onChange={updateTaskField}>
                 <option>Low</option>
                 <option>Medium</option>
                 <option>High</option>
@@ -759,35 +895,18 @@ function App() {
               />
 
               <label htmlFor="status">Status</label>
-              <select
-                id="status"
-                name="status"
-                value={form.status}
-                onChange={updateTaskField}
-              >
+              <select id="status" name="status" value={form.status} onChange={updateTaskField}>
                 <option>Pending</option>
                 <option>In Progress</option>
                 <option>Completed</option>
               </select>
 
-              <button
-                type="submit"
-                className="primary-button full-button"
-                disabled={saving}
-              >
-                {saving
-                  ? "Saving..."
-                  : editingId
-                    ? "Save Changes"
-                    : "Create Task"}
+              <button type="submit" className="primary-button full-button" disabled={saving}>
+                {saving ? "Saving..." : editingId ? "Save Changes" : "Create Task"}
               </button>
 
               {editingId && (
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={cancelEditing}
-                >
+                <button type="button" className="secondary-button" onClick={cancelEditing}>
                   Cancel Editing
                 </button>
               )}
